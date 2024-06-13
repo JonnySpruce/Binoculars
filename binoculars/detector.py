@@ -63,7 +63,7 @@ class Binoculars(object):
         self.max_token_observed = max_token_observed
 
     def remove_context_logits(self, a, b):
-        indices = tuple(range(b.size(dim=1) - 1, a.size(dim=1)))
+        indices = tuple(range(b.size(dim=1), a.size(dim=1)))
         output = a[:, (indices), :]
         return output
 
@@ -151,21 +151,24 @@ class Binoculars(object):
     def compute_score(
         self, input_text: Union[list[str], str]
     ) -> Union[float, list[float]]:
-        batch = [input_text] if isinstance(input_text, str) else input_text
-        encodings = self._tokenize(batch)
-        observer_logits, performer_logits = self._get_logits(encodings)
-        ppl = perplexity(encodings, performer_logits)
-        x_ppl = entropy(
-            observer_logits.to(DEVICE_1),
-            performer_logits.to(DEVICE_1),
-            encodings.to(DEVICE_1),
-            self.tokenizer.pad_token_id,
-        )
-        binoculars_scores = ppl / x_ppl
-        binoculars_scores = binoculars_scores.tolist()
-        return (
-            binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
-        )
+        try:
+            batch = [input_text] if isinstance(input_text, str) else input_text
+            encodings = self._tokenize(batch)
+            observer_logits, performer_logits = self._get_logits(encodings)
+            ppl = perplexity(encodings, performer_logits)
+            x_ppl = entropy(
+                observer_logits.to(DEVICE_1),
+                performer_logits.to(DEVICE_1),
+                encodings.to(DEVICE_1),
+                self.tokenizer.pad_token_id,
+            )
+            binoculars_scores = ppl / x_ppl
+            binoculars_scores = binoculars_scores.tolist()
+            return (
+                binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
+            )
+        except:
+            return None
 
     def predict(self, input_text: Union[list[str], str]) -> Union[list[str], str]:
         binoculars_scores = np.array(self.compute_score(input_text))
