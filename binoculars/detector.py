@@ -115,12 +115,12 @@ class Binoculars(object):
 
         _, code_only_logits_performer = torch.split(
             context_and_code_logits_performer,
-            [context_logits_performer.size(dim=1), code_logits_performer.size(dim=1)],
+            [context_logits_performer.size(dim=1)-1, code_logits_performer.size(dim=1)],
             dim=1,
         )
         _, code_only_logits_observer = torch.split(
             context_and_code_logits_observer,
-            [context_logits_observer.size(dim=1), code_logits_observer.size(dim=1)],
+            [context_logits_observer.size(dim=1)-1, code_logits_observer.size(dim=1)],
             dim=1,
         )
 
