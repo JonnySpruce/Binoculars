@@ -98,44 +98,48 @@ class Binoculars(object):
     def compute_score_with_context(
         self, input_text: str, context_length: int
     ) -> Union[float, list[float]]:
-        context = input_text[:context_length]
-        code = input_text[context_length:]
+        try:
+            context = input_text[:context_length]
+            code = input_text[context_length:]
 
-        context_encodings = self._tokenize(context)
-        code_encodings = self._tokenize(code)
-        code_and_context_encodings = self._tokenize(input_text)
+            context_encodings = self._tokenize(context)
+            code_encodings = self._tokenize(code)
+            code_and_context_encodings = self._tokenize(input_text)
 
-        context_logits_observer, context_logits_performer = self._get_logits(
-            context_encodings
-        )
-        code_logits_observer, code_logits_performer = self._get_logits(code_encodings)
-        context_and_code_logits_observer, context_and_code_logits_performer = (
-            self._get_logits(code_and_context_encodings)
-        )
+            context_logits_observer, context_logits_performer = self._get_logits(
+                context_encodings
+            )
+            code_logits_observer, code_logits_performer = self._get_logits(code_encodings)
+            context_and_code_logits_observer, context_and_code_logits_performer = (
+                self._get_logits(code_and_context_encodings)
+            )
 
-        _, code_only_logits_performer = torch.split(
-            context_and_code_logits_performer,
-            [context_logits_performer.size(dim=1)-1, code_logits_performer.size(dim=1)],
-            dim=1,
-        )
-        _, code_only_logits_observer = torch.split(
-            context_and_code_logits_observer,
-            [context_logits_observer.size(dim=1)-1, code_logits_observer.size(dim=1)],
-            dim=1,
-        )
+            _, code_only_logits_performer = torch.split(
+                context_and_code_logits_performer,
+                [context_logits_performer.size(dim=1)-1, code_logits_performer.size(dim=1)],
+                dim=1,
+            )
+            _, code_only_logits_observer = torch.split(
+                context_and_code_logits_observer,
+                [context_logits_observer.size(dim=1)-1, code_logits_observer.size(dim=1)],
+                dim=1,
+            )
 
-        ppl = perplexity(code_encodings, code_only_logits_performer)
-        x_ppl = entropy(
-            code_only_logits_observer.to(DEVICE_1),
-            code_only_logits_performer.to(DEVICE_1),
-            code_encodings.to(DEVICE_1),
-            self.tokenizer.pad_token_id,
-        )
-        binoculars_scores = ppl / x_ppl
-        binoculars_scores = binoculars_scores.tolist()
-        return (
-            binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
-        )
+            ppl = perplexity(code_encodings, code_only_logits_performer)
+            x_ppl = entropy(
+                code_only_logits_observer.to(DEVICE_1),
+                code_only_logits_performer.to(DEVICE_1),
+                code_encodings.to(DEVICE_1),
+                self.tokenizer.pad_token_id,
+            )
+            binoculars_scores = ppl / x_ppl
+            binoculars_scores = binoculars_scores.tolist()
+            return (
+                binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
+            )
+        except Exception as e:
+            print("error: "+e)
+            return None
 
     def predict(self, input_text: Union[list[str], str]) -> Union[list[str], str]:
         binoculars_scores = np.array(self.compute_score(input_text))
