@@ -3,10 +3,6 @@ from typing import Union
 import os
 import numpy as np
 import torch
-
-import torch.nn as nn
-import torch.nn.functional as F
-
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -29,31 +25,30 @@ DEVICE_2 = "cuda:1" if torch.cuda.device_count() > 1 else DEVICE_1
 
 
 class Binoculars(object):
-    def __init__(
-        self,
-        observer_name_or_path: str = "tiiuae/falcon-7b",
-        performer_name_or_path: str = "tiiuae/falcon-7b-instruct",
-        use_bfloat16: bool = True,
-        max_token_observed: int = 512,
-        mode: str = "low-fpr",
-    ) -> None:
+    def __init__(self,
+                 observer_name_or_path: str = "tiiuae/falcon-7b",
+                 performer_name_or_path: str = "tiiuae/falcon-7b-instruct",
+                 use_bfloat16: bool = True,
+                 max_token_observed: int = 512,
+                 mode: str = "low-fpr",
+                 ) -> None:
         assert_tokenizer_consistency(observer_name_or_path, performer_name_or_path)
 
         self.change_mode(mode)
-        self.observer_model = AutoModelForCausalLM.from_pretrained(
-            observer_name_or_path,
-            device_map={"": DEVICE_1},
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
-            token=huggingface_config["TOKEN"],
-        )
-        self.performer_model = AutoModelForCausalLM.from_pretrained(
-            performer_name_or_path,
-            device_map={"": DEVICE_2},
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
-            token=huggingface_config["TOKEN"],
-        )
+        self.observer_model = AutoModelForCausalLM.from_pretrained(observer_name_or_path,
+                                                                   device_map={"": DEVICE_1},
+                                                                   trust_remote_code=True,
+                                                                   torch_dtype=torch.bfloat16 if use_bfloat16
+                                                                   else torch.float32,
+                                                                   token=huggingface_config["TOKEN"]
+                                                                   )
+        self.performer_model = AutoModelForCausalLM.from_pretrained(performer_name_or_path,
+                                                                    device_map={"": DEVICE_2},
+                                                                    trust_remote_code=True,
+                                                                    torch_dtype=torch.bfloat16 if use_bfloat16
+                                                                    else torch.float32,
+                                                                    token=huggingface_config["TOKEN"]
+                                                                    )
         self.observer_model.eval()
         self.performer_model.eval()
 
@@ -61,11 +56,6 @@ class Binoculars(object):
         if not self.tokenizer.pad_token:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         self.max_token_observed = max_token_observed
-
-    def remove_context_logits(self, a, b):
-        indices = tuple(range(b.size(dim=1) - 1, a.size(dim=1)))
-        output = a[:, (indices), :]
-        return output
 
     def change_mode(self, mode: str) -> None:
         if mode == "low-fpr":
@@ -83,69 +73,8 @@ class Binoculars(object):
             padding="longest" if batch_size > 1 else False,
             truncation=True,
             max_length=self.max_token_observed,
-            return_token_type_ids=False,
-        ).to(self.observer_model.device)
+            return_token_type_ids=False).to(self.observer_model.device)
         return encodings
-
-    @torch.inference_mode()
-    def _get_logits_modified(
-        self,
-        encodings: transformers.BatchEncoding,
-        context_encodings: transformers.BatchEncoding,
-    ) -> torch.Tensor:
-        observer_logits = self.observer_model(**encodings.to(DEVICE_1)).logits
-        observer_context_logits = self.observer_model(
-            **context_encodings.to(DEVICE_1)
-        ).logits
-        performer_logits = self.performer_model(**encodings.to(DEVICE_2)).logits
-        performer_context_logits = self.performer_model(
-            **context_encodings.to(DEVICE_2)
-        ).logits
-        if DEVICE_1 != "cpu":
-            torch.cuda.synchronize()
-        return self.remove_context_logits(
-            observer_logits, observer_context_logits
-        ), self.remove_context_logits(performer_logits, performer_context_logits)
-
-    def compute_score_modified(
-        self, input_text: Union[list[str], str], context_length: int
-    ) -> Union[float, list[float]]:
-        try:
-            batch = [input_text] if isinstance(input_text, str) else input_text
-            encodings = self._tokenize(batch)
-
-            context_only = input_text[:context_length]
-            context_batch = (
-                [context_only] if isinstance(context_only, str) else context_only
-            )
-            context_encoding = self._tokenize(context_batch)
-
-            observer_logits, performer_logits = self._get_logits_modified(
-                encodings, context_encoding
-            )
-
-            input_only = input_text[context_length:]
-            input_batch = [input_only] if isinstance(input_only, str) else input_only
-            input_encoding = self._tokenize(input_batch)
-
-            ppl = perplexity(input_encoding.to(DEVICE_2), performer_logits)
-            x_ppl = entropy(
-                observer_logits.to(DEVICE_1),
-                performer_logits.to(DEVICE_1),
-                input_encoding.to(DEVICE_1),
-                self.tokenizer.pad_token_id,
-            )
-            binoculars_scores = ppl / x_ppl
-            binoculars_scores = binoculars_scores.tolist()
-            print(binoculars_scores)
-            return (
-                binoculars_scores[0]
-                if isinstance(input_text, str)
-                else binoculars_scores
-            )
-        except:
-            print("error")
-            return None
 
     @torch.inference_mode()
     def _get_logits(self, encodings: transformers.BatchEncoding) -> torch.Tensor:
@@ -155,30 +84,21 @@ class Binoculars(object):
             torch.cuda.synchronize()
         return observer_logits, performer_logits
 
-    def compute_score(
-        self, input_text: Union[list[str], str]
-    ) -> Union[float, list[float]]:
+    def compute_score(self, input_text: Union[list[str], str]) -> Union[float, list[float]]:
         batch = [input_text] if isinstance(input_text, str) else input_text
         encodings = self._tokenize(batch)
         observer_logits, performer_logits = self._get_logits(encodings)
         ppl = perplexity(encodings, performer_logits)
-        x_ppl = entropy(
-            observer_logits.to(DEVICE_1),
-            performer_logits.to(DEVICE_1),
-            encodings.to(DEVICE_1),
-            self.tokenizer.pad_token_id,
-        )
+        x_ppl = entropy(observer_logits.to(DEVICE_1), performer_logits.to(DEVICE_1),
+                        encodings.to(DEVICE_1), self.tokenizer.pad_token_id)
         binoculars_scores = ppl / x_ppl
         binoculars_scores = binoculars_scores.tolist()
-        return (
-            binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
-        )
+        return binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
 
     def predict(self, input_text: Union[list[str], str]) -> Union[list[str], str]:
         binoculars_scores = np.array(self.compute_score(input_text))
-        pred = np.where(
-            binoculars_scores < self.threshold,
-            "Most likely AI-generated",
-            "Most likely human-generated",
-        ).tolist()
+        pred = np.where(binoculars_scores < self.threshold,
+                        "Most likely AI-generated",
+                        "Most likely human-generated"
+                        ).tolist()
         return pred
