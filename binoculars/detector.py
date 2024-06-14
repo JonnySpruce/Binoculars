@@ -110,7 +110,7 @@ class Binoculars(object):
     ) -> Union[float, list[float]]:
         try:
             context = input_text[:context_length]
-            print(len(context))
+
             code = input_text[context_length:]
 
             context_encodings = self._tokenize(context)
@@ -120,9 +120,6 @@ class Binoculars(object):
             context_logits_observer, context_logits_performer = self._get_logits(
                 context_encodings
             )
-            code_logits_observer, code_logits_performer = self._get_logits(
-                code_encodings
-            )
             context_and_code_logits_observer, context_and_code_logits_performer = (
                 self._get_logits(code_and_context_encodings)
             )
@@ -130,20 +127,19 @@ class Binoculars(object):
             _, code_only_logits_performer = torch.split(
                 context_and_code_logits_performer,
                 [
-                    context_logits_performer.size(dim=1)-1,
-                    code_logits_performer.size(dim=1),
+                    context_logits_performer.size(dim=1) - 1,
+                    context_and_code_logits_performer.size(dim=1)- context_logits_performer.size(dim=1) + 1,
                 ],
                 dim=1,
             )
             _, code_only_logits_observer = torch.split(
                 context_and_code_logits_observer,
                 [
-                    context_logits_observer.size(dim=1)-1,
-                    code_logits_observer.size(dim=1),
+                    context_logits_observer.size(dim=1) - 1,
+                    context_and_code_logits_observer.size(dim=1) - context_logits_observer.size(dim=1) + 1,
                 ],
                 dim=1,
             )
-
             ppl = perplexity(code_encodings, code_only_logits_performer)
             x_ppl = entropy(
                 code_only_logits_observer.to(DEVICE_1),
