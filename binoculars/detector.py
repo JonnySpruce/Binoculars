@@ -138,7 +138,7 @@ class Binoculars(object):
                 binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
             )
         except Exception as e:
-            print("error: "+e)
+            print(e)
             return None
 
     def predict(self, input_text: Union[list[str], str]) -> Union[list[str], str]:
