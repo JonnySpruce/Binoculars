@@ -25,30 +25,31 @@ DEVICE_2 = "cuda:1" if torch.cuda.device_count() > 1 else DEVICE_1
 
 
 class Binoculars(object):
-    def __init__(self,
-                 observer_name_or_path: str = "tiiuae/falcon-7b",
-                 performer_name_or_path: str = "tiiuae/falcon-7b-instruct",
-                 use_bfloat16: bool = True,
-                 max_token_observed: int = 512,
-                 mode: str = "low-fpr",
-                 ) -> None:
+    def __init__(
+        self,
+        observer_name_or_path: str = "tiiuae/falcon-7b",
+        performer_name_or_path: str = "tiiuae/falcon-7b-instruct",
+        use_bfloat16: bool = True,
+        max_token_observed: int = 512,
+        mode: str = "low-fpr",
+    ) -> None:
         assert_tokenizer_consistency(observer_name_or_path, performer_name_or_path)
 
         self.change_mode(mode)
-        self.observer_model = AutoModelForCausalLM.from_pretrained(observer_name_or_path,
-                                                                   device_map={"": DEVICE_1},
-                                                                   trust_remote_code=True,
-                                                                   torch_dtype=torch.bfloat16 if use_bfloat16
-                                                                   else torch.float32,
-                                                                   token=huggingface_config["TOKEN"]
-                                                                   )
-        self.performer_model = AutoModelForCausalLM.from_pretrained(performer_name_or_path,
-                                                                    device_map={"": DEVICE_2},
-                                                                    trust_remote_code=True,
-                                                                    torch_dtype=torch.bfloat16 if use_bfloat16
-                                                                    else torch.float32,
-                                                                    token=huggingface_config["TOKEN"]
-                                                                    )
+        self.observer_model = AutoModelForCausalLM.from_pretrained(
+            observer_name_or_path,
+            device_map={"": DEVICE_1},
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
+            token=huggingface_config["TOKEN"],
+        )
+        self.performer_model = AutoModelForCausalLM.from_pretrained(
+            performer_name_or_path,
+            device_map={"": DEVICE_2},
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
+            token=huggingface_config["TOKEN"],
+        )
         self.observer_model.eval()
         self.performer_model.eval()
 
@@ -73,7 +74,8 @@ class Binoculars(object):
             padding="longest" if batch_size > 1 else False,
             truncation=True,
             max_length=self.max_token_observed,
-            return_token_type_ids=False).to(self.observer_model.device)
+            return_token_type_ids=False,
+        ).to(self.observer_model.device)
         return encodings
 
     @torch.inference_mode()
@@ -84,21 +86,83 @@ class Binoculars(object):
             torch.cuda.synchronize()
         return observer_logits, performer_logits
 
-    def compute_score(self, input_text: Union[list[str], str]) -> Union[float, list[float]]:
+    def compute_score(
+        self, input_text: Union[list[str], str]
+    ) -> Union[float, list[float]]:
         batch = [input_text] if isinstance(input_text, str) else input_text
         encodings = self._tokenize(batch)
         observer_logits, performer_logits = self._get_logits(encodings)
         ppl = perplexity(encodings, performer_logits)
-        x_ppl = entropy(observer_logits.to(DEVICE_1), performer_logits.to(DEVICE_1),
-                        encodings.to(DEVICE_1), self.tokenizer.pad_token_id)
+        x_ppl = entropy(
+            observer_logits.to(DEVICE_1),
+            performer_logits.to(DEVICE_1),
+            encodings.to(DEVICE_1),
+            self.tokenizer.pad_token_id,
+        )
         binoculars_scores = ppl / x_ppl
         binoculars_scores = binoculars_scores.tolist()
-        return binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
+        return (
+            binoculars_scores[0] if isinstance(input_text, str) else binoculars_scores
+        )
+
+    def compute_score_with_context(
+        self, input_text: str, context_length: int
+    ) -> Union[float, list[float]]:
+        try:
+            context = input_text[:context_length]
+
+            code = input_text[context_length:]
+
+            context_encodings = self._tokenize(context)
+            code_encodings = self._tokenize(code)
+            code_and_context_encodings = self._tokenize(input_text)
+
+            context_logits_observer, context_logits_performer = self._get_logits(
+                context_encodings
+            )
+            context_and_code_logits_observer, context_and_code_logits_performer = (
+                self._get_logits(code_and_context_encodings)
+            )
+
+            _, code_only_logits_performer = torch.split(
+                context_and_code_logits_performer,
+                [
+                    context_logits_performer.size(dim=1) - 1,
+                    context_and_code_logits_performer.size(dim=1)- context_logits_performer.size(dim=1) + 1,
+                ],
+                dim=1,
+            )
+            _, code_only_logits_observer = torch.split(
+                context_and_code_logits_observer,
+                [
+                    context_logits_observer.size(dim=1) - 1,
+                    context_and_code_logits_observer.size(dim=1) - context_logits_observer.size(dim=1) + 1,
+                ],
+                dim=1,
+            )
+            ppl = perplexity(code_encodings.to(DEVICE_2), code_only_logits_performer.to(DEVICE_2))
+            x_ppl = entropy(
+                code_only_logits_observer.to(DEVICE_1),
+                code_only_logits_performer.to(DEVICE_1),
+                code_encodings.to(DEVICE_1),
+                self.tokenizer.pad_token_id,
+            )
+            binoculars_scores = ppl / x_ppl
+            binoculars_scores = binoculars_scores.tolist()
+            return (
+                binoculars_scores[0]
+                if isinstance(input_text, str)
+                else binoculars_scores
+            )
+        except Exception as e:
+            print(e)
+            return None
 
     def predict(self, input_text: Union[list[str], str]) -> Union[list[str], str]:
         binoculars_scores = np.array(self.compute_score(input_text))
-        pred = np.where(binoculars_scores < self.threshold,
-                        "Most likely AI-generated",
-                        "Most likely human-generated"
-                        ).tolist()
+        pred = np.where(
+            binoculars_scores < self.threshold,
+            "Most likely AI-generated",
+            "Most likely human-generated",
+        ).tolist()
         return pred
