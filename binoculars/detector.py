@@ -140,7 +140,7 @@ class Binoculars(object):
                 ],
                 dim=1,
             )
-            ppl = perplexity(code_encodings, code_only_logits_performer)
+            ppl = perplexity(code_encodings.to(DEVICE_2), code_only_logits_performer.to(DEVICE_2))
             x_ppl = entropy(
                 code_only_logits_observer.to(DEVICE_1),
                 code_only_logits_performer.to(DEVICE_1),
