@@ -1,13 +1,13 @@
+import os
 from typing import Union
 
-import os
 import numpy as np
 import torch
 import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from .metrics import entropy, perplexity
 from .utils import assert_tokenizer_consistency
-from .metrics import perplexity, entropy
 
 torch.set_grad_enabled(False)
 
@@ -106,44 +106,21 @@ class Binoculars(object):
         )
 
     def compute_score_with_context(
-        self, input_text: str, context_length: int
+        self, input_text: str, context_token_length: int
     ) -> Union[float, list[float]]:
         try:
-            context = input_text[:context_length]
+            encodings = self._tokenize([input_text])
+            code_encodings = encodings[:, -context_token_length:]
 
-            code = input_text[context_length:]
+            observer_logits, performer_logits = self._get_logits(encodings)
 
-            context_encodings = self._tokenize(context)
-            code_encodings = self._tokenize(code)
-            code_and_context_encodings = self._tokenize(input_text)
+            performer_logits = performer_logits[:, -context_token_length:]
+            observer_logits = observer_logits[:, -context_token_length:]
 
-            context_logits_observer, context_logits_performer = self._get_logits(
-                context_encodings
-            )
-            context_and_code_logits_observer, context_and_code_logits_performer = (
-                self._get_logits(code_and_context_encodings)
-            )
-
-            _, code_only_logits_performer = torch.split(
-                context_and_code_logits_performer,
-                [
-                    context_logits_performer.size(dim=1) - 1,
-                    context_and_code_logits_performer.size(dim=1)- context_logits_performer.size(dim=1) + 1,
-                ],
-                dim=1,
-            )
-            _, code_only_logits_observer = torch.split(
-                context_and_code_logits_observer,
-                [
-                    context_logits_observer.size(dim=1) - 1,
-                    context_and_code_logits_observer.size(dim=1) - context_logits_observer.size(dim=1) + 1,
-                ],
-                dim=1,
-            )
-            ppl = perplexity(code_encodings.to(DEVICE_2), code_only_logits_performer.to(DEVICE_2))
+            ppl = perplexity(code_encodings, performer_logits)
             x_ppl = entropy(
-                code_only_logits_observer.to(DEVICE_1),
-                code_only_logits_performer.to(DEVICE_1),
+                observer_logits.to(DEVICE_1),
+                performer_logits.to(DEVICE_1),
                 code_encodings.to(DEVICE_1),
                 self.tokenizer.pad_token_id,
             )
